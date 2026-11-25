@@ -1,42 +1,83 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import "./App.css";
 import Navbar from "./components/Navbar";
 import Hero from "./components/Hero";
 import MatchCard from "./components/MatchCard";
+import BookingForm from "./components/BookingForm";
+import { supabase } from "./supabase";
 
-const matches = [
-  {
-    id: 1,
-    teams: "CSK vs MI",
-    date: "28 Mar 2026, 7:30 PM",
-    venue: "MA Chidambaram Stadium, Chennai",
-    prices: { general: 1500, premium: 3500, vip: 7000 },
-    teamCodes: ["csk", "mi"],
-  },
-  {
-    id: 2,
-    teams: "RCB vs KKR",
-    date: "29 Mar 2026, 7:30 PM",
-    venue: "M. Chinnaswamy Stadium, Bengaluru",
-    prices: { general: 2000, premium: 4000, vip: 8000 },
-    teamCodes: ["rcb", "kkr"],
-  },
-  {
-    id: 3,
-    teams: "MI vs RCB",
-    date: "01 Apr 2026, 3:30 PM",
-    venue: "Wankhede Stadium, Mumbai",
-    prices: { general: 2000, premium: 4500, vip: 9000 },
-    teamCodes: ["mi", "rcb"],
-  },
-];
+async function fetchMatches() {
+  const { data, error } = await supabase
+    .from("matches")
+    .select("*")
+    .order("id");
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
 
 function App() {
   const [team, setTeam] = useState("all");
+  const [matches, setMatches] = useState([]);
+  const [matchId, setMatchId] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  const loadMatches = useCallback(async () => {
+    try {
+      setMatches(await fetchMatches());
+      setError("");
+    } catch (error) {
+      setError(error.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetchMatches()
+      .then((data) => {
+        if (active) {
+          setMatches(data);
+          setError("");
+        }
+      })
+      .catch((error) => {
+        if (active) {
+          setError(error.message);
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+        }
+      });
+
+    const channel = supabase
+      .channel("matches-changes")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "matches" },
+        () => loadMatches()
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, [loadMatches]);
 
   const visibleMatches = matches.filter(
-    (m) => team === "all" || m.teamCodes.includes(team)
+    (match) => team === "all" || match.teams.includes(team)
   );
+
+  function selectMatch(id) {
+    setMatchId(String(id));
+    document.getElementById("booking")?.scrollIntoView({ behavior: "smooth" });
+  }
 
   return (
     <>
@@ -59,19 +100,22 @@ function App() {
           <option value="kkr">Kolkata Knight Riders</option>
         </select>
 
+        {loading && <p>Loading matches...</p>}
+        {error && <p role="alert">Error: {error}</p>}
+
         <div className="match-grid">
-          {visibleMatches.map((m) => (
-            <MatchCard
-              key={m.id}
-              matchNo={m.id}
-              teams={m.teams}
-              date={m.date}
-              venue={m.venue}
-              prices={m.prices}
-            />
+          {visibleMatches.map((match) => (
+            <MatchCard key={match.id} match={match} onBook={selectMatch} />
           ))}
         </div>
       </section>
+
+      <BookingForm
+        matches={matches}
+        matchId={matchId}
+        setMatchId={setMatchId}
+        onDone={loadMatches}
+      />
     </>
   );
 }
